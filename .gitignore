@@ -1,11 +1,11 @@
-# Data — never commit raw datasets
-**/data/raw/
-**/data/interim/
-**/data/processed/
+# Data — never commit raw datasets (but keep the folders via .gitkeep)
+**/data/raw/*
+**/data/interim/*
+**/data/processed/*
 *.csv
 *.parquet
 *.zip
-!**/data/**/.gitkeep
+!**/.gitkeep
 
 # Python
 __pycache__/
