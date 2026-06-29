@@ -33,12 +33,43 @@ Not committed. Fetch into `data/raw/`.
 5. **Validate** — counterfactual margin uplift vs actual prices; state assumptions explicitly.
 6. **Writeup** — narrative: naive ε vs corrected ε → margin cost of pricing on the wrong number.
 
+## Layout
+```
+src/                 reusable, importable pipeline
+  data.py            load_prepared(): clean panel + logs + markdown proxy
+  elasticity.py      naive_ols / fixed_effects / iv_2sls -> ElasticityResult
+  optimize.py        optimal_price p*=c·ε/(ε+1), margin_uplift, numeric check
+notebooks/           01_eda -> 02_elasticity -> 03_optimize (import from src/)
+kaggle/              self-contained notebook for publishing on Kaggle
+```
+
 ## Setup
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-jupyter lab  # notebooks/01_eda.ipynb
+python -m src.elasticity      # smoke-test the estimators on the fetched data
+jupyter lab                   # notebooks/01_eda.ipynb
 ```
+
+## Publish on Kaggle
+`kaggle/retail-pricing-optimization.ipynb` is **self-contained** (no `src/` import;
+auto-detects the data at `/kaggle/input/...`). The dataset is attached via
+`kaggle/kernel-metadata.json`.
+```bash
+cd kaggle && kaggle kernels push   # williemaize/retail-pricing-optimization
+```
+Starts **private** (`is_private: true`); flip to `false` in the metadata (or the Kaggle UI)
+when ready to publish for view.
+
+## Results (corrected for price endogeneity)
+| Estimator | ε | 95% CI | Read |
+|---|---|---|---|
+| naive OLS | −0.13 | [−0.24, −0.02] | biased foil — looks inelastic |
+| product+time FE | **−2.69** | [−3.62, −1.75] | within-product: genuinely elastic |
+| IV (competitor prices) | −0.16 | [−0.35, +0.04] | strong first stage (F≈1192), brushes 0 |
+
+The naive→FE gap is the headline: pricing on ε=−0.13 vs −2.69 is the difference between
+"raise price without limit" (no interior optimum) and a finite margin-maximizing `p*`.
 
 ## Assumptions / caveats (keep honest)
 - Constant-elasticity demand is a simplification; check robustness to functional form.
