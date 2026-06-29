@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize_scalar
 
 
@@ -72,6 +73,81 @@ def margin_uplift(
         price_star=p_star, margin_star=float(margin(p_star)),
         price_obs=price_obs, margin_obs=float(margin(price_obs)),
     )
+
+
+def per_product_counterfactual(
+    df: pd.DataFrame,
+    eps_table: pd.DataFrame,
+    cost_frac: float = 0.6,
+    eps_floor: float = -6.0,
+    max_price_change: float = 0.25,
+) -> tuple[pd.DataFrame, dict]:
+    """Apply each product's own optimal price; aggregate margin uplift vs status quo.
+
+    For each product we take its (shrunk) elasticity, set unit cost as a fraction
+    of its reference price, anchor a constant-elasticity demand curve at the
+    product's (median price, median qty), and compare margin at the optimal price
+    `p* = c·ε/(ε+1)` against the status-quo reference.
+
+    Two guardrails make this stable and realistic -- without them, noisy per-product
+    elasticities over-extrapolate the constant-elasticity curve and blow up:
+      * `eps_floor`: cap extreme (noisy) elasticities (e.g. ε=-20 -> -6).
+      * `max_price_change`: clip the recommended price to +/- this band around the
+        reference, keeping it near the observed price support (what real pricing
+        teams do). Products that aren't elastic (ε >= -1) **hold price**.
+
+    Aggregate uplift is weighted by each product's number of observed periods.
+
+    Assumptions (stated, not hidden): constant per-product elasticity; unit cost =
+    `cost_frac` x reference price (data has no cost); demand anchored in-sample. The
+    guardrail does real work -- report it, don't hide it. Sweep `cost_frac`.
+    """
+    ref = df.groupby("product_id").agg(
+        p_ref=("unit_price", "median"),
+        q_ref=("qty", "median"),
+        n=("qty", "size"),
+    ).reset_index()
+    m = ref.merge(eps_table[["product_id", "eps"]], on="product_id", how="left")
+
+    out = []
+    for r in m.itertuples():
+        eps = max(r.eps, eps_floor)  # cap extreme/noisy elasticities
+        c = cost_frac * r.p_ref
+        optimizable = eps < -1
+        if optimizable:
+            lo, hi = r.p_ref * (1 - max_price_change), r.p_ref * (1 + max_price_change)
+            p_unc = optimal_price(c, eps)
+            p_star = min(max(p_unc, lo), hi)            # clip to guardrail band
+            at_guardrail = not (lo < p_unc < hi)
+        else:
+            p_star, at_guardrail = r.p_ref, False        # not elastic -> hold price
+        A = fit_intercept(r.p_ref, r.q_ref, eps)
+        m_obs = (r.p_ref - c) * r.q_ref
+        m_star = (p_star - c) * demand(p_star, A, eps)
+        out.append({
+            "product_id": r.product_id, "n": r.n, "eps": eps,
+            "p_ref": r.p_ref, "cost": c, "p_star": p_star,
+            "optimizable": optimizable, "at_guardrail": at_guardrail,
+            "price_change_pct": 100 * (p_star - r.p_ref) / r.p_ref,
+            "margin_obs": m_obs, "margin_star": m_star,
+            "uplift_pct": 100 * (m_star - m_obs) / m_obs,
+        })
+    pp = pd.DataFrame(out)
+
+    w = pp["n"]
+    summary = {
+        "cost_frac": cost_frac,
+        "n_products": len(pp),
+        "n_optimizable": int(pp["optimizable"].sum()),
+        "n_at_guardrail": int(pp["at_guardrail"].sum()),
+        "share_price_increase": float((pp["p_star"] > pp["p_ref"]).mean()),
+        "weighted_uplift_pct": float(
+            100 * (w * (pp["margin_star"] - pp["margin_obs"])).sum()
+            / (w * pp["margin_obs"]).sum()
+        ),
+        "median_uplift_pct": float(pp["uplift_pct"].median()),
+    }
+    return pp, summary
 
 
 def optimize_numeric(cost: float, epsilon: float, A: float,

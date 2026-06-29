@@ -106,6 +106,47 @@ def iv_2sls(
     )
 
 
+def per_product_elasticities(
+    df: pd.DataFrame,
+    pool_epsilon: float | None = None,
+    min_obs: int = 4,
+    min_price_levels: int = 3,
+) -> tuple[pd.DataFrame, float]:
+    """Per-product log-log elasticities, partial-pooled toward the pooled estimate.
+
+    With ~13 months per product, raw per-product slopes are extremely noisy
+    (here SD ~ 10, range -30..+50). We shrink each product's estimate toward the
+    pooled FE elasticity by its own precision (empirical-Bayes / James-Stein):
+
+        eps_i_shrunk = w_i * eps_i_raw + (1 - w_i) * eps_pool,
+        w_i = tau^2 / (tau^2 + se_i^2),
+
+    where tau^2 (between-product variance) is estimated by method of moments.
+    Products with too few observations or no price variation are unestimable and
+    fall back to the pooled elasticity.
+
+    Returns (table, pool_epsilon). `table` has eps_raw, se, shrink_w, eps (final).
+    """
+    if pool_epsilon is None:
+        pool_epsilon = fixed_effects(df).epsilon
+
+    recs = []
+    for pid, g in df.groupby("product_id"):
+        if len(g) < min_obs or g["log_p"].nunique() < min_price_levels:
+            recs.append((pid, len(g), np.nan, np.nan))
+            continue
+        m = smf.ols("log_q ~ log_p", data=g).fit()
+        recs.append((pid, len(g), m.params["log_p"], m.bse["log_p"]))
+    e = pd.DataFrame(recs, columns=["product_id", "n", "eps_raw", "se"])
+
+    est = e["eps_raw"].notna()
+    tau2 = max(0.0, e.loc[est, "eps_raw"].var(ddof=1) - (e.loc[est, "se"] ** 2).mean())
+    e["shrink_w"] = tau2 / (tau2 + e["se"] ** 2)
+    e["eps"] = np.where(est, e["shrink_w"] * e["eps_raw"] + (1 - e["shrink_w"]) * pool_epsilon,
+                        pool_epsilon)
+    return e, pool_epsilon
+
+
 def compare_all(df: pd.DataFrame) -> pd.DataFrame:
     """Run all three estimators and return a tidy comparison table."""
     rows = [naive_ols(df), fixed_effects(df), iv_2sls(df)]
