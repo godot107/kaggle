@@ -1,0 +1,21 @@
+# Core
+pandas
+numpy
+matplotlib
+seaborn
+
+# Econometrics / causal
+statsmodels
+linearmodels        # panel fixed effects, IV/2SLS
+econml              # double ML / causal estimators
+doubleml            # alt double ML implementation
+
+# Optimization
+scipy
+
+# Notebook
+jupyter
+ipykernel
+
+# Data fetch (optional)
+kaggle
